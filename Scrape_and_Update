@@ -1,0 +1,165 @@
+# Created By: BAQI
+# Date Created: 14/11/2021
+# Python 3
+
+
+from datetime import datetime
+from bs4 import BeautifulSoup as soup
+from selenium import webdriver
+import re
+import openpyxl
+import os
+from datetime import datetime as dt
+from datetime import timedelta
+from datetime import date
+import datetime as dt2
+import sys, logging
+import subprocess
+import configparser
+import ast
+from openpyxl import load_workbook
+import pandas as pd
+import time
+
+#To call py file from another directory
+sys.path.insert(1, r"M:\Macros\07_EMEDPython3Lib")
+#import the module from the path 
+from setup_logging import setup_logging_info
+from setup_logging import setup_logging_mail
+#from setup_chrome_driver import setup_chrome_driver
+#log folder
+path_logfile = r"Location Folder File"
+#mail set up
+config = configparser.ConfigParser()
+config.read(r"Location File Send Email")
+mailSetting = config["ZAY_Setting"]
+
+mailSender = mailSetting.get("MailSender")
+mailRecipient = ast.literal_eval(mailSetting.get("MailRecipient"))
+mailSubject = mailSetting.get("MailSubject")
+mailPassword = mailSetting.get("Password")
+mailHost = mailSetting.get("MailHost")
+mailPort = mailSetting.get("MailPort")
+
+#error flag to decide what message to be sent
+error_flag = False
+#warning flag to check whether all the data is updated
+warning_flag = False
+
+workbook = r"Location File to Update"
+
+today = date.today()
+today = today.strftime("%Y%m%d")
+#log file name
+logfile = "%s.log"%(today)
+maillog = "mail%s.log"%(today)
+mail_logger = setup_logging_mail(mailSender, mailRecipient, mailSubject, mailPassword, mailHost, mailPort, path_logfile, maillog)
+logger = setup_logging_info(path_logfile, logfile)
+
+def save_data(df, sheetname):
+    """This function is to save data into specific sheet name
+    """
+    wb = load_workbook(workbook)
+    writer = pd.ExcelWriter(workbook, engine = "openpyxl")
+    writer.book = wb
+    #Delete the existing sheet which contains old data
+    if sheetname in wb.sheetnames:
+        del wb[sheetname]
+    writer.sheets = dict((ws.title,ws) for ws in wb.worksheets)
+    df = df.apply(pd.to_numeric, errors="ignore")
+    #Save the data into specific sheetname
+    df.to_excel(writer, sheet_name = sheetname, index = False)
+    #save the workbook
+    writer.save()
+
+def main():
+    logger.info("\n\n\tStarting copy data column B into ZA-Y_AUTO.xlsx\n")
+    firstWebsite()                                                                        
+    logger.info("\n\n\tFinish copy data column B into ZA-Y_AUTO.xlsx\n")
+    logger.info("\n\n\tStarting copy data column D-AK into ZA-Y_AUTO.xlsx\n")
+    secondWebsite()
+    logger.info("\n\n\tFinish copy data column D-AK into ZA-Y_AUTO.xlsx\n")
+    runningVBScript()                                                                       
+    logger.info("\n\n\tFinish update data into ZA-Y.xls\n")
+    
+def firstWebsite():
+    driver = webdriver.Chrome('M:/Macros/06_WebScarping/chromedriver.exe')
+    driver.get("https://www.wsj.com/market-data/quotes/index/ZA/ALSH/historical-prices")
+    time.sleep(10)
+    
+    html = driver.page_source
+    tables = pd.read_html(html)
+    data = tables[1]
+    data = data.iloc[:, lambda df: [0, 4]]
+    #data = data.drop(labels=range(1, 21), axis=0)
+    header = ['Date', 'Index']
+    data.columns = header
+    newdate = data.loc[0, 'Date']
+    newdate1 = newdate[:6]
+    newdate2 = newdate[6:]
+    newdate = newdate1 + "20" + newdate2
+    realDateUpdate = dt.strptime(newdate, '%m/%d/%Y')
+    finaldate = dt(realDateUpdate.year, realDateUpdate.month, realDateUpdate.day)
+    data.loc[0, 'Date'] = finaldate
+
+    save_data(data, "index")
+    
+def secondWebsite():
+    driver = webdriver.Chrome('Location File chromedriver.exe')
+    driver.get("https://www.resbank.co.za/en/home/what-we-do/statistics/key-statistics/current-market-rates")
+    time.sleep(10)
+            
+    html = driver.page_source
+    tables = pd.read_html(html)
+    data = tables[0]
+    data = data.iloc[:, lambda df: [0, 2, 3]]
+    data = data.drop([24, 12, 18, 6, 10, 13], axis=0)
+    header = ['Indicator', 'Value', 'Period']
+    data.columns = header
+    i=0
+    while i<27:
+        if i==6 or i==10 or i==12 or i==13 or i==18 or i==24:
+            i+=0
+        else:
+            newdate = data.loc[i, 'Period']
+            realDateUpdate = dt.strptime(newdate, '%Y-%m-%d')
+            finaldate = dt(realDateUpdate.year, realDateUpdate.month, realDateUpdate.day)
+            data.loc[i, 'Period'] = finaldate
+        i+=1
+    
+    #print(data)
+                            
+    save_data(data, "market-rates")
+    
+def runningVBScript():
+    logger.info("\n\n\tInitially update into ZA-Y.xls.....")
+    subprocess.call(["cscript.exe", "Location File vbs"])
+    
+
+if __name__ == "__main__":
+    os.chdir('Location Folder dailyMacF')                                                          
+    wb = openpyxl.load_workbook('ZA-Y_AUTO.xlsx')       
+    try:
+        main()
+    except:
+        logger.error("Error running ZA-Y-AUTO!", exc_info = True)
+        error_flag = True
+    if error_flag:
+        mail_logger.info("ZA-Y updated with error.\nPlease check and run the script again!\
+\n\nFurther information please check the log file at %s."%(path_logfile))
+    elif warning_flag:
+        mail_logger.info("ZA-Y updated with warning. Some data is not released today.\
+\n\nFurther information please check the log file at %s."%(path_logfile))
+    else:
+        mail_logger.info("ZA-Y updated successfully without error.\
+\n\nFurther information please check the log file at %s."%(path_logfile))
+    logger.handlers = []
+    mail_logger.handlers = []
+    logging.shutdown()
+    
+    
+# Created By: BAQI
+# Date Created: 14/11/2021
+# Python 3
+
+
